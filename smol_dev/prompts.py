@@ -1,10 +1,10 @@
 import asyncio
 import re
 import time
+import os
 from typing import List, Optional, Callable, Any
 
-import openai
-from openai_function_call import openai_function
+from openai import OpenAI
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -14,6 +14,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# إعداد عميل Groq
+client = OpenAI(
+    api_key=os.environ.get("OPENAI_API_KEY"),
+    base_url="https://api.groq.com/openai/v1"
+)
 
 SMOL_DEV_SYSTEM_PROMPT = """
 You are a top tier AI developer who is trying to write a program that will generate code for the user based on their intent.
@@ -23,26 +28,16 @@ When writing code, add comments to explain what you intend to do and why it alig
 """
 
 
-@openai_function
-def file_paths(files_to_edit: List[str]) -> List[str]:
-    """
-    Construct a list of strings.
-    """
-    # print("filesToEdit", files_to_edit)
-    return files_to_edit
-
-
-def specify_file_paths(prompt: str, plan: str, model: str = 'gpt-3.5-turbo-0613'):
-    completion = openai.ChatCompletion.create(
+def specify_file_paths(prompt: str, plan: str, model: str = 'llama3-70b-8192'):
+    completion = client.chat.completions.create(
         model=model,
         temperature=0.7,
-        functions=[file_paths.openai_schema],
-        function_call={"name": "file_paths"},
         messages=[
             {
                 "role": "system",
                 "content": f"""{SMOL_DEV_SYSTEM_PROMPT}
-      Given the prompt and the plan, return a list of strings corresponding to the new files that will be generated.
+      Given the prompt and the plan, return a JSON list of strings corresponding to the new files that will be generated.
+      Output only the JSON array, no other text.
                   """,
             },
             {
@@ -55,12 +50,22 @@ def specify_file_paths(prompt: str, plan: str, model: str = 'gpt-3.5-turbo-0613'
             },
         ],
     )
-    result = file_paths.from_response(completion)
-    return result
+    # استخراج الملفات من الرد
+    content = completion.choices[0].message.content
+    # محاولة استخراج JSON
+    import json
+    try:
+        # البحث عن مصفوفة JSON
+        match = re.search(r'\[.*?\]', content, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+        return []
+    except Exception:
+        return []
 
 
-def plan(prompt: str, stream_handler: Optional[Callable[[bytes], None]] = None, model: str='gpt-3.5-turbo-0613', extra_messages: List[Any] = []):
-    completion = openai.ChatCompletion.create(
+def plan(prompt: str, stream_handler: Optional[Callable[[bytes], None]] = None, model: str = 'llama3-70b-8192', extra_messages: List[Any] = []):
+    completion = client.chat.completions.create(
         model=model,
         temperature=0.7,
         stream=True,
@@ -84,28 +89,28 @@ def plan(prompt: str, stream_handler: Optional[Callable[[bytes], None]] = None, 
 
     collected_messages = []
     for chunk in completion:
-        chunk_message_dict = chunk["choices"][0]
-        chunk_message = chunk_message_dict["delta"]  # extract the message
-        if chunk_message_dict["finish_reason"] is None:
-            collected_messages.append(chunk_message)  # save the message
+        chunk_message_dict = chunk.choices[0]
+        chunk_message = chunk_message_dict.delta
+        if chunk_message_dict.finish_reason is None:
+            collected_messages.append(chunk_message)
             if stream_handler:
                 try:
-                    stream_handler(chunk_message["content"].encode("utf-8"))
+                    if chunk_message.content:
+                        stream_handler(chunk_message.content.encode("utf-8"))
                 except Exception as err:
-                    logger.info("\nstream_handler error:", err)
+                    logger.info(f"\nstream_handler error: {err}")
                     logger.info(chunk_message)
-    # if stream_handler and hasattr(stream_handler, "onComplete"): stream_handler.onComplete('done')
-    full_reply_content = "".join([m.get("content", "") for m in collected_messages])
+    full_reply_content = "".join([m.content or "" for m in collected_messages])
     return full_reply_content
 
 
 @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6))
 async def generate_code(prompt: str, plan: str, current_file: str, stream_handler: Optional[Callable[Any, Any]] = None,
-                        model: str = 'gpt-3.5-turbo-0613') -> str:
+                        model: str = 'llama3-70b-8192') -> str:
     first = True
     chunk_count = 0
     start_time = time.time()
-    completion = openai.ChatCompletion.acreate(
+    completion = client.chat.completions.create(
         model=model,
         temperature=0.7,
         messages=[
@@ -144,42 +149,3 @@ async def generate_code(prompt: str, plan: str, current_file: str, stream_handle
     Bad response (because it contains the code fence):
     ```javascript
     console.log("hello world")
-    ```
-
-    Good response (because it only contains the code):
-    console.log("hello world")
-
-    Begin generating the code now.
-
-    """,
-            },
-        ],
-        stream=True,
-    )
-
-    collected_messages = []
-    async for chunk in await completion:
-        chunk_message_dict = chunk["choices"][0]
-        chunk_message = chunk_message_dict["delta"]  # extract the message
-        if chunk_message_dict["finish_reason"] is None:
-            collected_messages.append(chunk_message)  # save the message
-            if stream_handler:
-                try:
-                    stream_handler(chunk_message["content"].encode("utf-8"))
-                except Exception as err:
-                    logger.info("\nstream_handler error:", err)
-                    logger.info(chunk_message)
-
-    # if stream_handler and hasattr(stream_handler, "onComplete"): stream_handler.onComplete('done')
-    code_file = "".join([m.get("content", "") for m in collected_messages])
-
-    pattern = r"```[\w\s]*\n([\s\S]*?)```"  # codeblocks at start of the string, less eager
-    code_blocks = re.findall(pattern, code_file, re.MULTILINE)
-    return code_blocks[0] if code_blocks else code_file
-
-
-def generate_code_sync(prompt: str, plan: str, current_file: str,
-                       stream_handler: Optional[Callable[Any, Any]] = None,
-                       model: str = 'gpt-3.5-turbo-0613') -> str:
-    loop = asyncio.get_event_loop()
-    return loop.run_until_complete(generate_code(prompt, plan, current_file, stream_handler, model))
