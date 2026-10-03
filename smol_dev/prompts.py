@@ -2,6 +2,7 @@ import asyncio
 import re
 import time
 import os
+import json
 from typing import List, Optional, Callable, Any
 
 from openai import OpenAI
@@ -14,7 +15,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# إعداد عميل Groq
 client = OpenAI(
     api_key=os.environ.get("OPENAI_API_KEY"),
     base_url="https://api.groq.com/openai/v1"
@@ -50,12 +50,8 @@ def specify_file_paths(prompt: str, plan: str, model: str = 'llama3-70b-8192'):
             },
         ],
     )
-    # استخراج الملفات من الرد
     content = completion.choices[0].message.content
-    # محاولة استخراج JSON
-    import json
     try:
-        # البحث عن مصفوفة JSON
         match = re.search(r'\[.*?\]', content, re.DOTALL)
         if match:
             return json.loads(match.group())
