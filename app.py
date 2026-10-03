@@ -1,7 +1,7 @@
 import os
 import subprocess
 import shutil
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, render_template_string, send_file
 
 app = Flask(__name__)
 
@@ -19,8 +19,6 @@ HTML = """
             background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
             color: #fff;
             min-height: 100vh;
-            display: flex;
-            flex-direction: column;
         }
         header {
             padding: 20px 40px;
@@ -41,12 +39,11 @@ HTML = """
             color: #000;
         }
         .container {
-            flex: 1;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            padding: 40px 20px;
+            padding: 60px 20px;
         }
         h1 {
             font-size: 48px;
@@ -83,7 +80,6 @@ HTML = """
             font-size: 16px;
             resize: none;
             outline: none;
-            transition: border 0.3s;
         }
         textarea:focus { border-color: #a78bfa; }
         .btn {
@@ -97,29 +93,15 @@ HTML = """
             font-size: 18px;
             font-weight: bold;
             cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
         }
-        .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 30px rgba(167, 139, 250, 0.4);
-        }
-        .result {
-            margin-top: 30px;
-            padding: 20px;
-            background: rgba(0, 0, 0, 0.4);
-            border-radius: 12px;
-            border-left: 4px solid #a78bfa;
-            white-space: pre-wrap;
-            font-family: monospace;
-            font-size: 14px;
-            max-height: 300px;
-            overflow-y: auto;
-        }
+        .btn:hover { transform: translateY(-2px); }
         .premium-section {
             margin-top: 30px;
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
             gap: 15px;
+            max-width: 700px;
+            width: 100%;
         }
         .premium-card {
             background: rgba(255, 255, 255, 0.05);
@@ -130,6 +112,18 @@ HTML = """
         }
         .premium-card h3 { color: #fbbf24; margin-bottom: 10px; }
         .premium-card p { color: #9ca3af; font-size: 14px; }
+        .result-box {
+            margin-top: 30px;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 12px;
+            border-left: 4px solid #a78bfa;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 14px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
     </style>
 </head>
 <body>
@@ -163,6 +157,13 @@ HTML = """
                 <p>Download Code</p>
             </div>
         </div>
+
+        {% if result %}
+        <div class="result-box">
+            <h3>✅ Generated:</h3>
+            <pre>{{ result }}</pre>
+        </div>
+        {% endif %}
     </div>
 </body>
 </html>
@@ -187,44 +188,18 @@ def generate():
             capture_output=True, text=True, timeout=300
         )
         
+        # إنشاء ملف ZIP
         shutil.make_archive("/tmp/output", 'zip', project_path)
         
-        return f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial; background: #0f0c29; color: #fff; padding: 40px; }}
-                .box {{ background: rgba(255,255,255,0.05); padding: 30px; border-radius: 20px; max-width: 800px; margin: auto; }}
-                h2 {{ color: #a78bfa; }}
-                pre {{ background: rgba(0,0,0,0.3); padding: 15px; border-radius: 10px; overflow-x: auto; }}
-                a {{ color: #f472b6; text-decoration: none; font-weight: bold; }}
-            </style>
-        </head>
-        <body>
-            <div class="box">
-                <h2>✅ Success!</h2>
-                <p>Your project has been generated.</p>
-                <h3>Output:</h3>
-                <pre>{result.stdout}</pre>
-                <p><strong>Note:</strong> ZIP saved at /tmp/output.zip</p>
-                <a href="/">← Go Back</a>
-            </div>
-        </body>
-        </html>
-        """
+        # إرسال الملف للتحميل
+        return send_file(
+            "/tmp/output.zip",
+            as_attachment=True,
+            download_name="generated_code.zip",
+            mimetype="application/zip"
+        )
     except Exception as e:
-        return f"""
-        <html>
-        <head><style>body {{ font-family: Arial; background: #0f0c29; color: #fff; padding: 40px; }}</style></head>
-        <body>
-            <div style="max-width: 800px; margin: auto; background: rgba(255,255,255,0.05); padding: 30px; border-radius: 20px;">
-                <h2 style="color: #ef4444;">❌ Error:</h2>
-                <pre>{str(e)}</pre>
-                <a href="/" style="color: #f472b6;">← Go Back</a>
-            </div>
-        </body>
-        </html>
-        """
+        return render_template_string(HTML, result=f"Error: {str(e)}")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000)
